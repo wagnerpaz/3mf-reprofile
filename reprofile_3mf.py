@@ -1,50 +1,51 @@
 #!/usr/bin/env python3
 """
-3mf-reprofile — troca o perfil de máquina de um projeto .3mf SEM perder o que o
-autor do modelo ajustou.
+3mf-reprofile — swap the machine profile of a .3mf project WITHOUT losing what
+the model's author tuned.
 
-Serve para qualquer fatiador da família Orca — OrcaSlicer, Bambu Studio, Elegoo
-Slicer, Creality Print, Anycubic, Qidi, Snapmaker — porque todos guardam os
-ajustes no mesmo lugar dentro do 3MF. NÃO serve para PrusaSlicer nem Cura, que
-usam outra estrutura.
+Works with any slicer in the Orca family — OrcaSlicer, Bambu Studio, Elegoo
+Slicer, Creality Print, Anycubic, Qidi, Snapmaker — because they all store the
+settings in the same place inside the 3MF. It does NOT work with PrusaSlicer or
+Cura, which use a different structure.
 
-O problema que isto resolve
----------------------------
-Seu fatiador abre o .3mf de outra máquina, mas ao abrir aplica o preset dele por
-cima e sobrescreve, calado, ajustes de processo do autor. Medido num par real do
-mesmo modelo (Bambu X1 Carbon -> Elegoo Centauri Carbon): casca inferior 0 ->
-0.6, pé de elefante 0.15 -> 0.1, parede interna 300 -> 200 mm/s, preenchimento
-sólido zig-zag -> monotônico, tempos de ventoinha alterados. Nada perguntado.
+The problem this solves
+-----------------------
+Your slicer opens a .3mf authored on another machine, but on opening it applies
+its own preset on top and silently overwrites the author's process settings.
+Measured on a real pair of the same model (Bambu X1 Carbon -> Elegoo Centauri
+Carbon): bottom shell 0 -> 0.6, elephant foot 0.15 -> 0.1, inner wall 300 -> 200
+mm/s, solid infill zig-zag -> monotonic, fan timings changed. None of it asked.
 
-A ideia
--------
-Montar o `project_settings.config` de saída assim:
+The idea
+--------
+Build the output `project_settings.config` by scope:
 
-  máquina   -> SEMPRE do doador (um .3mf que você mesmo salvou no SEU fatiador).
-               É o que faz o arquivo imprimir na sua impressora: dialeto de
-               G-code, códigos de início/fim, área da mesa, limites de aceleração.
-  filamento -> do doador por padrão (é o rolo que VOCÊ vai usar), salvo
-               --filamento-do-autor.
-  processo  -> do AUTOR. É o que você quer preservar: paredes, preenchimento,
-               costura, velocidades, suportes, camada.
+  machine  -> ALWAYS from the donor (a .3mf you saved in YOUR OWN slicer). It is
+              what makes the file print on your printer: G-code flavour,
+              start/end G-code, bed area, acceleration limits.
+  filament -> from the donor by default (it is the spool YOU will use), unless
+              --author-filament is given.
+  process  -> from the AUTHOR. This is what you want to keep: walls, infill,
+              seam, speeds, supports, layer height.
 
-E, por cima de tudo, o que o autor declarou ter mudado de propósito — o campo
-`different_settings_to_system` do arquivo de origem — é tratado como intocável.
+And on top of all that, whatever the author declared as a deliberate change —
+the source file's own `different_settings_to_system` field — is treated as
+untouchable and never yields to the preset.
 
-Duas correções que o formato exige
+Two corrections the format demands
 ----------------------------------
-1. Aridade: uma máquina multi-extrusor guarda valor por extrusor (lista de 4);
-   uma de extrusor único guarda lista de 1. Sem colapsar, 67 das 149 diferenças
-   de um par real eram só isso — ruído, não mudança.
-2. Forma: alguns forks guardam certas chaves como escalar onde outros usam lista
-   de um. A saída copia a forma do doador, chave a chave.
+1. Arity: a multi-extruder machine stores one value per extruder (a list of 4);
+   a single-extruder one stores a list of 1. Without collapsing these, 67 of the
+   149 differences in a real pair were only this — noise, not change.
+2. Shape: some forks store certain keys as a scalar where others use a list of
+   one. The output copies the donor's shape, key by key.
 
-O que NÃO é tocado: geometria, pintura de cor, pintura de suporte, modificadores
-e ajustes por objeto. O arquivo de saída é o zip de origem inteiro com um único
-membro reescrito.
+What is NOT touched: geometry, colour painting, support painting, modifiers and
+per-object settings. The output file is the entire source zip with a single
+member rewritten.
 
-Uso:
-    python reprofile_3mf.py origem.3mf --doador projeto_meu.3mf -o saida.3mf
+Usage:
+    python reprofile_3mf.py source.3mf --donor my_project.3mf -o output.3mf
 """
 
 import argparse
@@ -57,16 +58,16 @@ from pathlib import Path
 CONFIG = "Metadata/project_settings.config"
 
 # ---------------------------------------------------------------------------
-# Classificação de chaves.
+# Key classification.
 #
-# Não existe marcação de escopo dentro do arquivo, então a separação é por nome.
-# Regra: o que casar com MAQUINA ou FILAMENTO vem do doador; TODO o resto é
-# tratado como processo e vem do autor. Chaves de processo que eu não conheça
-# entram nessa vala comum de propósito — preservar demais é o objetivo — mas o
-# relatório lista todas elas para você conferir em vez de confiar.
+# There is no scope marker inside the file, so the split is by name. Rule:
+# anything matching MACHINE or FILAMENT comes from the donor; EVERYTHING else is
+# treated as process and comes from the author. Process keys I don't know about
+# land in that catch-all on purpose — over-preserving is the goal — but the
+# report lists every one of them so you can check instead of trusting.
 # ---------------------------------------------------------------------------
 
-MAQUINA_PREFIXOS = (
+MACHINE_PREFIXES = (
     "machine_", "printer_", "printable_", "printhost_", "extruder_",
     "print_host", "host_type", "bed_", "gcode_", "z_hop",
     "retraction_", "retract_", "wipe_distance", "wipe",
@@ -77,7 +78,7 @@ MAQUINA_PREFIXOS = (
     "best_object_pos", "head_wrap_detect_zone",
 )
 
-MAQUINA_EXATAS = {
+MACHINE_EXACT = {
     "before_layer_change_gcode", "layer_change_gcode", "change_filament_gcode",
     "machine_start_gcode", "machine_end_gcode", "machine_pause_gcode",
     "template_custom_gcode", "time_lapse_gcode", "printing_by_object_gcode",
@@ -87,15 +88,15 @@ MAQUINA_EXATAS = {
     "upward_compatible_machine", "支持的打印机", "print_settings_id",
     "printer_settings_id", "printer_model", "printer_variant",
     "different_settings_to_system",
-    # Listas de compatibilidade: se vierem do autor, o fatiador passa a
-    # considerar o perfil incompatível com a sua própria impressora e ignora o
-    # arquivo. Sempre do doador.
+    # Compatibility lists: if these come from the author, the slicer decides the
+    # profile is incompatible with your own printer and ignores the file.
+    # Always from the donor.
     "print_compatible_printers", "filament_compatible_printers",
     "compatible_printers", "compatible_printers_condition",
     "compatible_prints", "compatible_prints_condition",
 }
 
-FILAMENTO_PREFIXOS = (
+FILAMENT_PREFIXES = (
     "filament_", "nozzle_temperature", "chamber_temp", "cool_plate_temp",
     "eng_plate_temp", "hot_plate_temp", "textured_plate_temp",
     "supertack_plate_temp", "fan_", "overhang_fan_", "close_fan_",
@@ -107,205 +108,205 @@ FILAMENTO_PREFIXOS = (
     "impact_strength_z", "activate_chamber_temp_control",
 )
 
-FILAMENTO_EXATAS = {"filament_settings_id", "filament_ids", "filament_colour",
-                    "default_filament_colour", "flush_volumes_matrix",
-                    "flush_volumes_vector", "flush_multiplier"}
+FILAMENT_EXACT = {"filament_settings_id", "filament_ids", "filament_colour",
+                  "default_filament_colour", "flush_volumes_matrix",
+                  "flush_volumes_vector", "flush_multiplier"}
 
 
-def escopo(chave: str) -> str:
-    if chave in MAQUINA_EXATAS or chave.startswith(MAQUINA_PREFIXOS):
-        return "maquina"
-    if chave in FILAMENTO_EXATAS or chave.startswith(FILAMENTO_PREFIXOS):
-        return "filamento"
-    return "processo"
+def scope_of(key: str) -> str:
+    if key in MACHINE_EXACT or key.startswith(MACHINE_PREFIXES):
+        return "machine"
+    if key in FILAMENT_EXACT or key.startswith(FILAMENT_PREFIXES):
+        return "filament"
+    return "process"
 
 
-def ler_config(caminho: Path) -> dict:
-    with zipfile.ZipFile(caminho) as z:
+def read_config(path: Path) -> dict:
+    with zipfile.ZipFile(path) as z:
         if CONFIG not in z.namelist():
             raise SystemExit(
-                f"{caminho.name}: não tem {CONFIG} — é um .3mf só de malha, "
-                "sem ajustes do autor para preservar."
+                f"{path.name}: has no {CONFIG} — it is a mesh-only .3mf, with no "
+                "author settings to preserve."
             )
         return json.loads(z.read(CONFIG).decode("utf-8"))
 
 
-def ajustar_forma(valor, molde):
-    """Devolve `valor` na forma de `molde` (escalar x lista, e aridade)."""
-    if isinstance(molde, list):
-        itens = valor if isinstance(valor, list) else [valor]
-        if not itens:
-            return list(molde)
-        # Multi-extrusor -> extrusor único: se o autor tinha o mesmo valor em
-        # todos, é um valor só; se tinha valores diferentes, o primeiro é o do
-        # extrusor primário, que é o que a máquina de bico único usa.
-        if len(molde) == 1:
-            return [itens[0]]
-        return (itens + [itens[-1]] * len(molde))[: len(molde)]
-    if isinstance(valor, list):
-        return valor[0] if valor else molde
-    return valor
+def match_shape(value, template):
+    """Return `value` in the shape of `template` (scalar vs list, and arity)."""
+    if isinstance(template, list):
+        items = value if isinstance(value, list) else [value]
+        if not items:
+            return list(template)
+        # Multi-extruder -> single extruder: if the author had the same value on
+        # every extruder it is a single value; if they differed, the first one is
+        # the primary extruder, which is the one a single-tool machine uses.
+        if len(template) == 1:
+            return [items[0]]
+        return (items + [items[-1]] * len(template))[: len(template)]
+    if isinstance(value, list):
+        return value[0] if value else template
+    return value
 
 
-def declaradas_pelo_autor(origem: dict) -> set:
-    """As chaves que o autor mudou de propósito, segundo o próprio arquivo."""
-    campo = origem.get("different_settings_to_system", [])
-    if isinstance(campo, str):
-        campo = [campo]
-    chaves = set()
-    for bloco in campo:
-        for parte in str(bloco).split(";"):
-            parte = parte.strip()
-            if parte:
-                chaves.add(parte)
-    return chaves
+def author_declared(source: dict) -> set:
+    """The keys the author changed on purpose, according to the file itself."""
+    field = source.get("different_settings_to_system", [])
+    if isinstance(field, str):
+        field = [field]
+    keys = set()
+    for block in field:
+        for part in str(block).split(";"):
+            part = part.strip()
+            if part:
+                keys.add(part)
+    return keys
 
 
-def converter(origem_p: Path, doador_p: Path, saida_p: Path,
-              filamento_do_autor: bool) -> dict:
-    origem = ler_config(origem_p)
-    doador = ler_config(doador_p)
+def reprofile(source_p: Path, donor_p: Path, output_p: Path,
+              author_filament: bool) -> dict:
+    source = read_config(source_p)
+    donor = read_config(donor_p)
 
-    intocaveis = declaradas_pelo_autor(origem)
-    saida = dict(doador)
+    untouchable = author_declared(source)
+    result = dict(donor)
 
-    relatorio = {
-        "origem": origem.get("printer_model", "?"),
-        "doador": doador.get("printer_model", "?"),
-        "intocaveis": sorted(intocaveis),
-        "preservadas": [],
-        "so_forma": [],
-        "da_maquina": [],
-        "do_doador_filamento": [],
-        "ignoradas_nao_existem_no_doador": [],
-        "avisos": [],
+    report = {
+        "source": source.get("printer_model", "?"),
+        "donor": donor.get("printer_model", "?"),
+        "untouchable": sorted(untouchable),
+        "preserved": [],
+        "shape_only": [],
+        "from_machine": [],
+        "filament_from_donor": [],
+        "skipped_absent_in_donor": [],
+        "warnings": [],
     }
 
-    for chave, valor_autor in origem.items():
-        if chave not in doador:
-            relatorio["ignoradas_nao_existem_no_doador"].append(chave)
+    for key, author_value in source.items():
+        if key not in donor:
+            report["skipped_absent_in_donor"].append(key)
             continue
 
-        esc = escopo(chave)
-        forcado = chave in intocaveis
+        scope = scope_of(key)
+        forced = key in untouchable
 
-        if esc == "maquina" and not forcado:
-            relatorio["da_maquina"].append(chave)
+        if scope == "machine" and not forced:
+            report["from_machine"].append(key)
             continue
-        if esc == "filamento" and not (forcado or filamento_do_autor):
-            relatorio["do_doador_filamento"].append(chave)
+        if scope == "filament" and not (forced or author_filament):
+            report["filament_from_donor"].append(key)
             continue
 
-        novo = ajustar_forma(valor_autor, doador[chave])
-        if novo == doador[chave]:
-            relatorio["so_forma"].append(chave)
+        new_value = match_shape(author_value, donor[key])
+        if new_value == donor[key]:
+            report["shape_only"].append(key)
         else:
-            relatorio["preservadas"].append(
-                {"chave": chave, "de": doador[chave], "para": novo,
-                 "declarada_pelo_autor": forcado}
+            report["preserved"].append(
+                {"key": key, "was": donor[key], "now": new_value,
+                 "author_declared": forced}
             )
-        saida[chave] = novo
+        result[key] = new_value
 
-    # Alerta de limite físico: velocidade do autor acima do que a máquina aceita.
-    teto = doador.get("machine_max_speed_x") or doador.get("machine_max_speed_e")
+    # Physical-limit warning: an author speed above what the machine accepts.
+    ceiling = donor.get("machine_max_speed_x") or donor.get("machine_max_speed_e")
     try:
-        teto = float(teto[0] if isinstance(teto, list) else teto)
+        ceiling = float(ceiling[0] if isinstance(ceiling, list) else ceiling)
     except (TypeError, ValueError, IndexError):
-        teto = None
-    if teto:
-        for item in relatorio["preservadas"]:
-            if not item["chave"].endswith("_speed"):
+        ceiling = None
+    if ceiling:
+        for item in report["preserved"]:
+            if not item["key"].endswith("_speed"):
                 continue
             try:
-                v = float(str(item["para"][0] if isinstance(item["para"], list)
-                              else item["para"]).rstrip("%"))
+                v = float(str(item["now"][0] if isinstance(item["now"], list)
+                              else item["now"]).rstrip("%"))
             except ValueError:
                 continue
-            if v > teto:
-                relatorio["avisos"].append(
-                    f"{item['chave']} = {v} está acima do limite da máquina "
-                    f"({teto}). Preservei o valor do autor, mas confira."
+            if v > ceiling:
+                report["warnings"].append(
+                    f"{item['key']} = {v} is above the machine limit "
+                    f"({ceiling}). Kept the author's value, but check it."
                 )
 
-    # O arquivo de saída é o zip de origem inteiro — geometria, pintura de cor,
-    # pintura de suporte e ajustes por objeto passam intactos — com um único
-    # membro reescrito.
-    shutil.copyfile(origem_p, saida_p)
-    _reescrever_membro(saida_p, CONFIG, json.dumps(saida, ensure_ascii=False,
-                                                   indent=4).encode("utf-8"))
-    return relatorio
+    # The output file is the entire source zip — geometry, colour painting,
+    # support painting and per-object settings pass through untouched — with a
+    # single member rewritten.
+    shutil.copyfile(source_p, output_p)
+    _rewrite_member(output_p, CONFIG,
+                    json.dumps(result, ensure_ascii=False, indent=4).encode("utf-8"))
+    return report
 
 
-def _reescrever_membro(zip_path: Path, membro: str, conteudo: bytes) -> None:
+def _rewrite_member(zip_path: Path, member: str, content: bytes) -> None:
     tmp = zip_path.with_suffix(".tmp3mf")
-    with zipfile.ZipFile(zip_path) as origem, \
-            zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as destino:
-        for info in origem.infolist():
-            dados = conteudo if info.filename == membro else origem.read(info.filename)
-            destino.writestr(info, dados)
+    with zipfile.ZipFile(zip_path) as src, \
+            zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            data = content if info.filename == member else src.read(info.filename)
+            dst.writestr(info, data)
     tmp.replace(zip_path)
 
 
-def imprimir_relatorio(r: dict, verboso: bool) -> None:
-    print(f"\n  origem : {r['origem']}")
-    print(f"  doador : {r['doador']}")
-    print(f"\n  o autor declarou ter mudado de propósito ({len(r['intocaveis'])}):")
-    for c in r["intocaveis"]:
-        print(f"      {c}")
-    print(f"\n  ajustes do autor preservados : {len(r['preservadas'])}")
-    print(f"  já eram iguais / só forma    : {len(r['so_forma'])}")
-    print(f"  trocados pela sua máquina    : {len(r['da_maquina'])}")
-    print(f"  filamento vindo do doador    : {len(r['do_doador_filamento'])}")
-    if r["ignoradas_nao_existem_no_doador"]:
-        print(f"  chaves da origem sem par no doador (ignoradas): "
-              f"{len(r['ignoradas_nao_existem_no_doador'])}")
+def print_report(r: dict, verbose: bool) -> None:
+    print(f"\n  source : {r['source']}")
+    print(f"  donor  : {r['donor']}")
+    print(f"\n  declared by the author as deliberate ({len(r['untouchable'])}):")
+    for k in r["untouchable"]:
+        print(f"      {k}")
+    print(f"\n  author settings preserved   : {len(r['preserved'])}")
+    print(f"  already equal / shape only  : {len(r['shape_only'])}")
+    print(f"  replaced by your machine    : {len(r['from_machine'])}")
+    print(f"  filament taken from donor   : {len(r['filament_from_donor'])}")
+    if r["skipped_absent_in_donor"]:
+        print(f"  source keys with no donor counterpart (skipped): "
+              f"{len(r['skipped_absent_in_donor'])}")
 
-    destaques = [p for p in r["preservadas"] if p["declarada_pelo_autor"]]
-    if destaques:
-        print("\n  os intocáveis, valor a valor:")
-        for p in destaques:
-            print(f"      {p['chave']}: {p['de']} -> {p['para']}")
+    highlights = [p for p in r["preserved"] if p["author_declared"]]
+    if highlights:
+        print("\n  the untouchable ones, value by value:")
+        for p in highlights:
+            print(f"      {p['key']}: {p['was']} -> {p['now']}")
 
-    if verboso and r["preservadas"]:
-        print("\n  todos os ajustes preservados:")
-        for p in r["preservadas"]:
-            print(f"      {p['chave']}: {p['de']} -> {p['para']}")
+    if verbose and r["preserved"]:
+        print("\n  every preserved setting:")
+        for p in r["preserved"]:
+            print(f"      {p['key']}: {p['was']} -> {p['now']}")
 
-    for aviso in r["avisos"]:
-        print(f"\n  [AVISO] {aviso}")
+    for warning in r["warnings"]:
+        print(f"\n  [WARNING] {warning}")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Troca o perfil de máquina de um .3mf (família Orca) "
-                    "preservando os ajustes do autor do modelo.")
-    ap.add_argument("origem", type=Path,
-                    help="o .3mf de outra máquina (MakerWorld, Bambu, etc.)")
-    ap.add_argument("--doador", type=Path, required=True,
-                    help="um .3mf que VOCÊ salvou no seu fatiador; é dele que "
-                         "sai o perfil da máquina")
-    ap.add_argument("-o", "--saida", type=Path,
-                    help="arquivo de saída (padrão: <origem> - reprofiled.3mf)")
-    ap.add_argument("--filamento-do-autor", action="store_true",
-                    help="também copia o perfil de filamento do autor (por "
-                         "padrão vem do doador, que é o rolo que você vai usar)")
-    ap.add_argument("-v", "--verboso", action="store_true",
-                    help="lista todos os ajustes preservados, não só os "
-                         "declarados pelo autor")
+        description="Swap the machine profile of a .3mf (Orca family) while "
+                    "keeping the model author's tuning.")
+    ap.add_argument("source", type=Path,
+                    help="the .3mf authored on another machine (MakerWorld, "
+                         "Bambu, etc.)")
+    ap.add_argument("--donor", type=Path, required=True,
+                    help="a .3mf YOU saved in your own slicer; the machine "
+                         "profile comes from it")
+    ap.add_argument("-o", "--output", type=Path,
+                    help="output file (default: <source> - reprofiled.3mf)")
+    ap.add_argument("--author-filament", action="store_true",
+                    help="also copy the author's filament profile (by default it "
+                         "comes from the donor, which is the spool you will use)")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="list every preserved setting, not only the declared ones")
     args = ap.parse_args()
 
-    if not args.origem.exists():
-        print(f"não achei {args.origem}", file=sys.stderr)
+    if not args.source.exists():
+        print(f"cannot find {args.source}", file=sys.stderr)
         return 1
-    if not args.doador.exists():
-        print(f"não achei o doador {args.doador}", file=sys.stderr)
+    if not args.donor.exists():
+        print(f"cannot find donor {args.donor}", file=sys.stderr)
         return 1
 
-    saida = args.saida or args.origem.with_name(
-        f"{args.origem.stem} - reprofiled.3mf")
-    r = converter(args.origem, args.doador, saida, args.filamento_do_autor)
-    imprimir_relatorio(r, args.verboso)
-    print(f"\n  escrito: {saida}")
+    output = args.output or args.source.with_name(
+        f"{args.source.stem} - reprofiled.3mf")
+    r = reprofile(args.source, args.donor, output, args.author_filament)
+    print_report(r, args.verbose)
+    print(f"\n  written: {output}")
     return 0
 
 

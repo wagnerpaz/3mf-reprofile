@@ -1,27 +1,28 @@
 # 3mf-reprofile
 
-Troca o perfil de máquina de um projeto `.3mf` **sem perder o que o autor do
-modelo ajustou**.
+Swap the machine profile of a `.3mf` project **without losing what the model's
+author tuned**.
 
-Funciona com qualquer fatiador da família Orca — OrcaSlicer, Bambu Studio, Elegoo
-Slicer, Creality Print, Anycubic, Qidi, Snapmaker —, porque todos guardam os
-ajustes no mesmo lugar dentro do 3MF. **Não** funciona com PrusaSlicer nem Cura,
-que usam outra estrutura.
+Works with any slicer in the Orca family — OrcaSlicer, Bambu Studio, Elegoo
+Slicer, Creality Print, Anycubic, Qidi, Snapmaker — because they all store the
+settings in the same place inside the 3MF. It does **not** work with PrusaSlicer
+or Cura, which use a different structure.
 
-## O problema
+## The problem
 
-Seu fatiador abre o `.3mf` que veio do MakerWorld, mas ao abrir aplica o preset
-dele por cima e sobrescreve, calado, ajustes de processo do autor.
+Your slicer opens the `.3mf` you downloaded from MakerWorld, but on opening it
+applies its own preset on top and silently overwrites the author's process
+settings.
 
-Medido num par real do mesmo modelo, salvo em duas máquinas (Bambu X1 Carbon e
-Elegoo Centauri Carbon): das 149 diferenças entre os dois arquivos, **67 eram só
-formato** (a máquina multi-extrusor guarda um valor por extrusor, em lista de 4;
-a de bico único guarda lista de 1) e **82 eram mudança de valor de verdade**.
-Parte dessas 82 é máquina, e está certo trocar — dialeto de G-code de Marlin para
-Klipper, códigos de início e fim, área da mesa. A outra parte é o trabalho do
-autor indo embora sem aviso:
+Measured on a real pair of the same model saved on two machines (Bambu X1 Carbon
+and Elegoo Centauri Carbon): of the 149 differences between the two files, **67
+were shape only** (the multi-extruder machine stores one value per extruder, in a
+list of 4; the single-nozzle one stores a list of 1) and **82 were real value
+changes**. Some of those 82 are machine settings, and replacing them is correct —
+G-code flavour from Marlin to Klipper, start and end G-code, bed area. The rest
+is the author's work quietly going away:
 
-| ajuste | autor | virou |
+| setting | author | became |
 |---|---|---|
 | `bottom_shell_thickness` | 0 | 0.6 |
 | `elefant_foot_compensation` | 0.15 | 0.1 |
@@ -29,52 +30,52 @@ autor indo embora sem aviso:
 | `internal_solid_infill_pattern` | zig-zag | monotonic |
 | `ensure_vertical_shell_thickness` | enabled | ensure_all |
 
-## Como resolve
+## How it fixes that
 
-O `project_settings.config` de saída é montado por escopo:
+The output `project_settings.config` is assembled by scope:
 
-- **máquina** → sempre do *doador*, um `.3mf` que você mesmo salvou no seu
-  fatiador. É o que faz o arquivo imprimir na sua impressora.
-- **filamento** → do doador por padrão, porque é o rolo que *você* vai usar
-  (`--filamento-do-autor` inverte isso).
-- **processo** → do autor. Paredes, preenchimento, costura, velocidades,
-  suportes, altura de camada.
+- **machine** → always from the *donor*, a `.3mf` you saved in your own slicer.
+  It is what makes the file print on your printer.
+- **filament** → from the donor by default, because it is the spool *you* will
+  use (`--author-filament` flips this).
+- **process** → from the author. Walls, infill, seam, speeds, supports, layer
+  height.
 
-Por cima disso, o que o autor declarou ter mudado de propósito — o campo
-`different_settings_to_system`, que o próprio arquivo carrega — é tratado como
-intocável e nunca cede para o preset.
+On top of that, whatever the author declared as a deliberate change — the
+`different_settings_to_system` field the file already carries — is treated as
+untouchable and never yields to the preset.
 
-Duas correções que o formato exige: **aridade** (listas por extrusor colapsam
-para o número de extrusores da máquina de destino) e **forma** (alguns forks
-guardam certas chaves como escalar onde outros usam lista de um). A saída copia a
-forma do doador, chave a chave.
+Two corrections the format demands: **arity** (per-extruder lists collapse to the
+target machine's extruder count) and **shape** (some forks store certain keys as
+a scalar where others use a list of one). The output copies the donor's shape,
+key by key.
 
-**Não são tocados:** geometria, pintura de cor, pintura de suporte, modificadores
-e ajustes por objeto. O arquivo de saída é o zip de origem inteiro com um único
-membro reescrito.
+**Not touched:** geometry, colour painting, support painting, modifiers and
+per-object settings. The output file is the entire source zip with a single
+member rewritten.
 
-## Uso
+## Usage
 
 ```
-python reprofile_3mf.py modelo_do_makerworld.3mf \
-    --doador qualquer_projeto_meu.3mf \
-    -o "modelo - minha impressora.3mf"
+python reprofile_3mf.py model_from_makerworld.3mf \
+    --donor any_project_of_mine.3mf \
+    -o "model - my printer.3mf"
 ```
 
-Opções: `--filamento-do-autor` para trazer também o perfil de filamento do autor,
-`-v` para listar todos os ajustes preservados e não só os declarados.
+Options: `--author-filament` to bring the author's filament profile across as
+well, `-v` to list every preserved setting and not only the declared ones.
 
-O relatório sai na tela: o que foi preservado, o que foi trocado pela máquina, o
-que era só formato, e um aviso quando um valor do autor passa do limite físico da
-sua máquina — nesse caso o valor é preservado mesmo assim e o aviso fica com
-você, em vez de a ferramenta decidir escondido.
+The report goes to the screen: what was preserved, what was replaced by your
+machine, what was shape only, and a warning when an author value goes past your
+machine's physical limit — in that case the value is preserved anyway and the
+warning is left with you, instead of the tool deciding behind your back.
 
-Só precisa de Python 3.8+ e da biblioteca padrão.
+Requires Python 3.8+ and the standard library only.
 
-## Estado
+## Status
 
-Testado no caminho Bambu Lab → Elegoo Centauri Carbon: zip íntegro, todos os
-membros internos idênticos ao original exceto o de configuração, 27 ajustes do
-autor preservados. Os outros fatiadores da família devem funcionar pelo mesmo
-mecanismo, mas ainda não foram rodados — se algum abrir torto, o relatório com
-`-v` é o ponto de partida.
+Tested on the Bambu Lab → Elegoo Centauri Carbon path: zip intact, every internal
+member identical to the original except the config one, 27 author settings
+preserved. The other slicers in the family should work through the same
+mechanism, but have not been run yet — if one opens wrong, the `-v` report is the
+starting point.
