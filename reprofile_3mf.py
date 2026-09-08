@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """
-bambu2centauri — reaproveita um projeto .3mf da Bambu (ou do MakerWorld) na
-Elegoo Centauri Carbon SEM perder o que o autor ajustou.
+3mf-reprofile — troca o perfil de máquina de um projeto .3mf SEM perder o que o
+autor do modelo ajustou.
+
+Serve para qualquer fatiador da família Orca — OrcaSlicer, Bambu Studio, Elegoo
+Slicer, Creality Print, Anycubic, Qidi, Snapmaker — porque todos guardam os
+ajustes no mesmo lugar dentro do 3MF. NÃO serve para PrusaSlicer nem Cura, que
+usam outra estrutura.
 
 O problema que isto resolve
 ---------------------------
-O Elegoo Slicer abre o .3mf da Bambu (os dois são forks do Orca), mas ao abrir
-ele aplica o preset dele por cima e sobrescreve, calado, ajustes de processo do
-autor. Medido num par real do mesmo modelo (X1 Carbon -> Centauri):
-casca inferior 0 -> 0.6, pé de elefante 0.15 -> 0.1, parede interna 300 -> 200
-mm/s, preenchimento sólido zig-zag -> monotônico, tempos de ventoinha alterados.
-Nada disso foi perguntado.
+Seu fatiador abre o .3mf de outra máquina, mas ao abrir aplica o preset dele por
+cima e sobrescreve, calado, ajustes de processo do autor. Medido num par real do
+mesmo modelo (Bambu X1 Carbon -> Elegoo Centauri Carbon): casca inferior 0 ->
+0.6, pé de elefante 0.15 -> 0.1, parede interna 300 -> 200 mm/s, preenchimento
+sólido zig-zag -> monotônico, tempos de ventoinha alterados. Nada perguntado.
 
 A ideia
 -------
 Montar o `project_settings.config` de saída assim:
 
-  máquina   -> SEMPRE do doador (um .3mf que você mesmo salvou na Centauri).
+  máquina   -> SEMPRE do doador (um .3mf que você mesmo salvou no SEU fatiador).
                É o que faz o arquivo imprimir na sua impressora: dialeto de
                G-code, códigos de início/fim, área da mesa, limites de aceleração.
   filamento -> do doador por padrão (é o rolo que VOCÊ vai usar), salvo
@@ -29,18 +33,18 @@ E, por cima de tudo, o que o autor declarou ter mudado de propósito — o campo
 
 Duas correções que o formato exige
 ----------------------------------
-1. Aridade: a Bambu multi-AMS guarda valor por extrusor (lista de 4); a Centauri
-   tem um só (lista de 1). Sem colapsar, 67 das 149 diferenças de um par real
-   eram só isso — ruído, não mudança.
-2. Forma: o fork da Elegoo guarda algumas chaves como escalar onde a Bambu usa
-   lista de um. A saída copia a forma do doador, chave a chave.
+1. Aridade: uma máquina multi-extrusor guarda valor por extrusor (lista de 4);
+   uma de extrusor único guarda lista de 1. Sem colapsar, 67 das 149 diferenças
+   de um par real eram só isso — ruído, não mudança.
+2. Forma: alguns forks guardam certas chaves como escalar onde outros usam lista
+   de um. A saída copia a forma do doador, chave a chave.
 
 O que NÃO é tocado: geometria, pintura de cor, pintura de suporte, modificadores
 e ajustes por objeto. O arquivo de saída é o zip de origem inteiro com um único
 membro reescrito.
 
 Uso:
-    python bambu2centauri.py origem.3mf --doador meu_centauri.3mf -o saida.3mf
+    python reprofile_3mf.py origem.3mf --doador projeto_meu.3mf -o saida.3mf
 """
 
 import argparse
@@ -83,7 +87,7 @@ MAQUINA_EXATAS = {
     "upward_compatible_machine", "支持的打印机", "print_settings_id",
     "printer_settings_id", "printer_model", "printer_variant",
     "different_settings_to_system",
-    # Listas de compatibilidade: se vierem do autor, o Elegoo Slicer passa a
+    # Listas de compatibilidade: se vierem do autor, o fatiador passa a
     # considerar o perfil incompatível com a sua própria impressora e ignora o
     # arquivo. Sempre do doador.
     "print_compatible_printers", "filament_compatible_printers",
@@ -134,7 +138,7 @@ def ajustar_forma(valor, molde):
             return list(molde)
         # Multi-extrusor -> extrusor único: se o autor tinha o mesmo valor em
         # todos, é um valor só; se tinha valores diferentes, o primeiro é o do
-        # extrusor primário, que é o que a Centauri usa.
+        # extrusor primário, que é o que a máquina de bico único usa.
         if len(molde) == 1:
             return [itens[0]]
         return (itens + [itens[-1]] * len(molde))[: len(molde)]
@@ -273,14 +277,15 @@ def imprimir_relatorio(r: dict, verboso: bool) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Reaproveita um .3mf da Bambu/MakerWorld na Elegoo Centauri "
-                    "Carbon preservando os ajustes do autor.")
-    ap.add_argument("origem", type=Path, help="o .3mf da Bambu / MakerWorld")
+        description="Troca o perfil de máquina de um .3mf (família Orca) "
+                    "preservando os ajustes do autor do modelo.")
+    ap.add_argument("origem", type=Path,
+                    help="o .3mf de outra máquina (MakerWorld, Bambu, etc.)")
     ap.add_argument("--doador", type=Path, required=True,
-                    help="um .3mf que VOCÊ salvou no Elegoo Slicer; é dele que "
+                    help="um .3mf que VOCÊ salvou no seu fatiador; é dele que "
                          "sai o perfil da máquina")
     ap.add_argument("-o", "--saida", type=Path,
-                    help="arquivo de saída (padrão: <origem> - centauri.3mf)")
+                    help="arquivo de saída (padrão: <origem> - reprofiled.3mf)")
     ap.add_argument("--filamento-do-autor", action="store_true",
                     help="também copia o perfil de filamento do autor (por "
                          "padrão vem do doador, que é o rolo que você vai usar)")
@@ -297,7 +302,7 @@ def main() -> int:
         return 1
 
     saida = args.saida or args.origem.with_name(
-        f"{args.origem.stem} - centauri.3mf")
+        f"{args.origem.stem} - reprofiled.3mf")
     r = converter(args.origem, args.doador, saida, args.filamento_do_autor)
     imprimir_relatorio(r, args.verboso)
     print(f"\n  escrito: {saida}")
